@@ -1,0 +1,85 @@
+name: Check profiles
+
+on: 
+  pull_request:
+    branches: 
+      - main 
+    paths:
+      - 'profiles/**'
+      - '.github/workflows/check_profiles.yml'
+
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/**'
+      - 'scripts/pack_profiles.sh'
+
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: 'Log level'     
+        required: true
+        default: 'warning'
+
+jobs:
+  check_profiles:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download validator
+        run: |
+          curl -LJO https://github.com/SoftFever/Orca_tools/releases/download/1/OrcaSlicer_profile_validator
+          chmod +x ./OrcaSlicer_profile_validator
+
+      - name: Run validation for each profile version
+        run: |
+          for dir in ./profiles/*/
+          do
+            echo "Validating profiles in $dir"
+            python3 ./scripts/orca_extra_profile_check.py --dir "$dir"
+            ./OrcaSlicer_profile_validator -p "$dir" -l 2
+          done
+
+  release_profiles:
+    runs-on: ubuntu-24.04
+    needs: check_profiles
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up GitHub CLI
+        run: |
+          sudo apt update
+          sudo apt install gh -y
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Loop through profile versions and release each
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x ./scripts/pack_profiles.sh
+          mkdir -p output
+
+          TIMESTAMP=$(date +%s)
+
+          for dir in ./profiles/*/; do
+            VERSION=$(basename "$dir")
+            NUMBER="$TIMESTAMP"
+            ZIP_NAME="orcaslicer-profiles_ota_${VERSION}.${NUMBER}.zip"
+            echo "Packaging $VERSION"
+
+            ./scripts/pack_profiles.sh "$VERSION" "$NUMBER"
+            mv "./orcaslicer-profiles_ota_${VERSION}.${NUMBER}.zip" ./output/
+
+            echo "Creating/updating release for $VERSION"
+            gh release delete "$VERSION" -y || true
+            gh release create "$VERSION" ./output/$ZIP_NAME \
+              --title "$VERSION" \
+              --notes "Automated release of profiles for $VERSION"
+          done
+
